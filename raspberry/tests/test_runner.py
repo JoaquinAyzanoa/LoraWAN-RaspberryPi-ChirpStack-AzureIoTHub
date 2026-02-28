@@ -56,6 +56,7 @@ def _make_async_client() -> MagicMock:
     client.connect = AsyncMock()
     client.shutdown = AsyncMock()
     client.send_message = AsyncMock()
+    client.send_method_response = AsyncMock()
     return client
 
 
@@ -95,6 +96,12 @@ class TestDeviceRunnerProperties:
             asyncio.run(runner.enqueue(SAMPLE_RAW_DATA))
             assert runner._queue.qsize() == 1
 
+    def test_queue_is_bounded(self):
+        with patch("src.devices.runner.IoTHubDeviceClient"):
+            from src.devices.runner import DeviceRunner, _QUEUE_MAX_SIZE
+            runner = DeviceRunner(_make_device())
+            assert runner._queue.maxsize == _QUEUE_MAX_SIZE
+
 
 # ---------------------------------------------------------------------------
 # DeviceRunner — connection state handler
@@ -117,7 +124,7 @@ class TestConnectionStateHandler:
             asyncio.run(_run())
             assert runner.connected_event.is_set()
             assert not runner.disconnected_event.is_set()
-            assert runner._retry_factor == 1  # reset
+            assert runner._retry_factor == 0  # reset
 
     def test_disconnected_sets_events(self):
         with patch("src.devices.runner.IoTHubDeviceClient") as MockClass:

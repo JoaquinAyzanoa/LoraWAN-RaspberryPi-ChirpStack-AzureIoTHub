@@ -9,12 +9,16 @@ from azure.iot.device.aio import IoTHubDeviceClient  # type: ignore[import]
 from azure.iot.device import Message  # type: ignore[import]
 
 from .device import Device
+from ..receiver.azure_iot_receiver import DirectMethodRegistry
 
 logger = logging.getLogger(__name__)
 
 # Exponential back-off settings
 _INITIAL_RETRY_INTERVAL: float = 2.0   # seconds
 _MAX_RETRY_INTERVAL: float = 7200.0    # 2 hours
+
+# Maximum pending messages before the queue applies back-pressure
+_QUEUE_MAX_SIZE: int = 100
 
 
 async def _wait_first(*events: asyncio.Event) -> None:
@@ -35,16 +39,12 @@ class DeviceRunner:
     """
     Robust async lifecycle manager for a single :class:`Device`.
 
-    Owns an independent ``IoTHubDeviceClient`` connection and three
-    ``asyncio.Event``s that gate sending:
+    Owns the **sole** ``IoTHubDeviceClient`` for this device and handles:
 
-    - ``connected_event``   — set when the MQTT link is up
-    - ``disconnected_event`` — set when the link drops (starts set)
-    - ``exit_event``        — set to request a graceful stop
-
-    Outgoing messages are placed in an internal ``asyncio.Queue``; the send
-    loop drains it as fast as the connection allows.  Messages that fail to
-    send are automatically re-enqueued so nothing is lost across reconnects.
+    - Outgoing telemetry via an internal ``asyncio.Queue``
+    - Incoming C2D messages (generic cloud-to-device)
+    - Incoming direct method invocations (via :class:`DirectMethodRegistry`)
+    - Auto-reconnect with exponential back-off
 
     Parameters
     ----------
@@ -63,8 +63,10 @@ class DeviceRunner:
         self.exit_event = asyncio.Event()
         self.disconnected_event.set()   # start in "disconnected" state
 
-        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._retry_factor: int = 1
+        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+            maxsize=_QUEUE_MAX_SIZE
+        )
+        self._retry_factor: int = 0
         self._retry_interval: float = _INITIAL_RETRY_INTERVAL
         self._try_number: int = 1
 
@@ -106,7 +108,7 @@ class DeviceRunner:
             self.disconnected_event.clear()
             self.connected_event.set()
             # Reset back-off on success
-            self._retry_factor = 1
+            self._retry_factor = 0
             self._retry_interval = _INITIAL_RETRY_INTERVAL
             self._try_number = 1
         else:
@@ -138,7 +140,7 @@ class DeviceRunner:
                     logger.info("[%s] Successfully connected.", self.device_id)
                 except Exception as exc:  # noqa: BLE001
                     sleep = min(
-                        _INITIAL_RETRY_INTERVAL ** self._retry_factor,
+                        _INITIAL_RETRY_INTERVAL * (2 ** self._retry_factor),
                         _MAX_RETRY_INTERVAL,
                     )
                     if sleep >= _MAX_RETRY_INTERVAL:
@@ -224,18 +226,31 @@ class DeviceRunner:
     # run
     # ------------------------------------------------------------------
 
-    async def run(self, on_c2d_message: Callable[[str, Any], None] | None = None) -> None:
+    async def run(
+        self,
+        on_c2d_message: Callable[[str, Any], None] | None = None,
+        method_registry: DirectMethodRegistry | None = None,
+    ) -> None:
         """
         Connect and run indefinitely.
 
         Starts the reconnect and send loops as concurrent tasks.
-        Call :meth:`stop` or set ``exit_event`` to shut down gracefully.
-        On fatal reconnect failure the coroutine raises.
+        Optionally handles C2D messages and direct method invocations.
+
+        Parameters
+        ----------
+        on_c2d_message:
+            Callback ``(device_id, payload)`` invoked for each generic
+            cloud-to-device message.
+        method_registry:
+            A :class:`DirectMethodRegistry` whose handlers will be
+            dispatched for incoming direct method invocations.
         """
         self._client.on_connection_state_change = self._on_connection_state_change
-        
+
+        # --- C2D message handler ---
         if on_c2d_message:
-            def _handler(message: Any) -> None:
+            def _c2d_handler(message: Any) -> None:
                 raw = message.data
                 body = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                 try:
@@ -244,8 +259,15 @@ class DeviceRunner:
                     payload = body
                 logger.info("[%s] C2D message received.", self.device_id)
                 on_c2d_message(self.device_id, payload)
-                
-            self._client.on_message_received = _handler
+
+            self._client.on_message_received = _c2d_handler
+
+        # --- Direct method handler ---
+        if method_registry:
+            dispatcher = method_registry.create_dispatcher(
+                self._client, self.device_id
+            )
+            self._client.on_method_request_received = dispatcher
 
         reconnect_task = asyncio.create_task(
             self._reconnect_loop(), name=f"{self.device_id}-reconnect"
@@ -265,6 +287,7 @@ class DeviceRunner:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             self._client.on_message_received = None
+            self._client.on_method_request_received = None
             try:
                 await self._client.shutdown()
             except Exception:  # noqa: BLE001

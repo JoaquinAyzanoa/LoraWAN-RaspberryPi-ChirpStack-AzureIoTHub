@@ -28,6 +28,22 @@ def _build_valve(
 
 
 # ---------------------------------------------------------------------------
+# Required top-level keys
+# ---------------------------------------------------------------------------
+
+_REQUIRED_KEYS = ("Alarma_Bajo_Nivel", "Bomba", "Estado_Equipo")
+
+_REQUIRED_VALVE_FIELDS = (
+    "Estado",
+    "Grasa_24h",
+    "Grasa_Dispensada_Desde_Ultimo_Relleno",
+    "Grasa_Ultimo_Ciclo",
+    "Longitud_Pulsos_Ultimo_Ciclo",
+    "Pulsos_Ultimo_Ciclo",
+)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -53,7 +69,19 @@ def build_payload(raw_data: dict[str, Any], n_valves: int) -> str:
     -------
     str
         JSON-encoded payload.
+
+    Raises
+    ------
+    ValueError
+        If any required key or valve field is missing from *raw_data*.
     """
+    # Validate top-level keys
+    missing = [k for k in _REQUIRED_KEYS if k not in raw_data]
+    if missing:
+        raise ValueError(
+            f"raw_data is missing required top-level key(s): {', '.join(missing)}"
+        )
+
     payload: dict[str, Any] = {
         "Alarma_Bajo_Nivel": raw_data["Alarma_Bajo_Nivel"],
         "Bomba": raw_data["Bomba"],
@@ -62,7 +90,19 @@ def build_payload(raw_data: dict[str, Any], n_valves: int) -> str:
 
     for i in range(1, n_valves + 1):
         key = f"Valvula_V{i}"
+        if key not in raw_data:
+            raise ValueError(
+                f"raw_data is missing valve key '{key}' (expected {n_valves} valves)"
+            )
         valve_raw = raw_data[key]
+
+        # Validate valve fields
+        missing_fields = [f for f in _REQUIRED_VALVE_FIELDS if f not in valve_raw]
+        if missing_fields:
+            raise ValueError(
+                f"Valve '{key}' is missing field(s): {', '.join(missing_fields)}"
+            )
+
         payload[key] = _build_valve(
             estado=valve_raw["Estado"],
             grasa_24h=valve_raw["Grasa_24h"],

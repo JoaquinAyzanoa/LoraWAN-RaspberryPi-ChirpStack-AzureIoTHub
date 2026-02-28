@@ -3,9 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from azure.iot.device.aio import IoTHubDeviceClient  # type: ignore[import]
-from azure.iot.device import Message  # type: ignore[import]
-
 from ..sender.payload_builder import build_payload as _build_payload
 from ..settings import settings
 
@@ -14,7 +11,11 @@ logger = logging.getLogger(__name__)
 
 class Device:
     """
-    Represents a single LoRaWAN field device connected to Azure IoT Hub.
+    Pure data model for a single LoRaWAN field device connected to Azure IoT Hub.
+
+    This class holds configuration only — it does **not** create or own an
+    ``IoTHubDeviceClient``.  Connection lifecycle is managed by
+    :class:`~src.devices.runner.DeviceRunner`.
 
     Properties
     ----------
@@ -36,9 +37,6 @@ class Device:
         self._device_id = device_id
         self._connection_string = connection_string
         self._n_valves = n_valves
-        self._client = IoTHubDeviceClient.create_from_connection_string(
-            connection_string
-        )
 
     # ------------------------------------------------------------------
     # Properties
@@ -68,50 +66,6 @@ class Device:
         are included, so each device sends only its own valves.
         """
         return _build_payload(raw_data, self._n_valves)
-
-    # ------------------------------------------------------------------
-    # Async connection lifecycle
-    # ------------------------------------------------------------------
-
-    async def connect(self) -> None:
-        """Open the async MQTT connection to Azure IoT Hub."""
-        await self._client.connect()
-        logger.info("[%s] Connected to Azure IoT Hub.", self._device_id)
-
-    async def shutdown(self) -> None:
-        """Gracefully shut down the connection to Azure IoT Hub."""
-        await self._client.shutdown()
-        logger.info("[%s] Disconnected from Azure IoT Hub.", self._device_id)
-
-    async def __aenter__(self) -> Device:
-        await self.connect()
-        return self
-
-    async def __aexit__(self, *_: object) -> None:
-        await self.shutdown()
-
-    # ------------------------------------------------------------------
-    # Send
-    # ------------------------------------------------------------------
-
-    async def send(self, raw_data: dict[str, Any]) -> None:
-        """
-        Build a device-specific payload from *raw_data* and send it to
-        Azure IoT Hub.  Call ``connect()`` first, or use as an async context manager.
-        """
-        json_payload = self.build_payload(raw_data)
-        message = Message(
-            json_payload,
-            content_encoding="utf-8",
-            content_type="application/json",
-        )
-        await self._client.send_message(message)
-        logger.info(
-            "[%s] Telemetry sent (%d valves, %d bytes).",
-            self._device_id,
-            self._n_valves,
-            len(json_payload),
-        )
 
 
 # ---------------------------------------------------------------------------

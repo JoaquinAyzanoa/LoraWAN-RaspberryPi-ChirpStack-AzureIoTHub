@@ -114,6 +114,32 @@ class TestBuildPayload:
         assert parsed["Bomba"]["Falla_Presion"] is True
 
 
+class TestBuildPayloadValidation:
+    """Tests for input validation in build_payload."""
+
+    def test_missing_top_level_key_raises(self):
+        bad_data = {k: v for k, v in SAMPLE_RAW_DATA.items() if k != "Bomba"}
+        with pytest.raises(ValueError, match="Bomba"):
+            build_payload(bad_data, n_valves=1)
+
+    def test_missing_valve_key_raises(self):
+        # Only provide V1, but request 2 valves
+        data = {
+            "Alarma_Bajo_Nivel": SAMPLE_RAW_DATA["Alarma_Bajo_Nivel"],
+            "Bomba": SAMPLE_RAW_DATA["Bomba"],
+            "Estado_Equipo": True,
+            "Valvula_V1": SAMPLE_RAW_DATA["Valvula_V1"],
+        }
+        with pytest.raises(ValueError, match="Valvula_V2"):
+            build_payload(data, n_valves=2)
+
+    def test_missing_valve_field_raises(self):
+        data = dict(SAMPLE_RAW_DATA)
+        data["Valvula_V1"] = {"Estado": True}  # missing other fields
+        with pytest.raises(ValueError, match="Grasa_24h"):
+            build_payload(data, n_valves=1)
+
+
 # ---------------------------------------------------------------------------
 # AzureIoTSender — async, IoTHubDeviceClient is mocked with AsyncMock
 # ---------------------------------------------------------------------------
@@ -205,21 +231,12 @@ class TestAzureIoTSender:
 
 
 # ---------------------------------------------------------------------------
-# Device — async, properties, payload building, and IoT Hub send (mocked)
+# Device — pure data model (no client, no connect/shutdown/send)
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
-def mock_device_client():
-    """Patch IoTHubDeviceClient (aio) inside src.devices.device."""
-    with patch("src.devices.device.IoTHubDeviceClient") as MockClass:
-        instance = _make_async_client()
-        MockClass.create_from_connection_string.return_value = instance
-        yield instance
-
-
 class TestDevice:
-    def test_properties(self, mock_device_client):
+    def test_properties(self):
         device = Device(
             device_id="pulse-id-100",
             connection_string=_FAKE_CONN_STR,
@@ -229,7 +246,7 @@ class TestDevice:
         assert device.connection_string == _FAKE_CONN_STR
         assert device.n_valves == 4
 
-    def test_build_payload_slices_correct_valves(self, mock_device_client):
+    def test_build_payload_slices_correct_valves(self):
         """A 2-valve Device must only include V1 and V2 in its payload."""
         device = Device(device_id="d", connection_string=_FAKE_CONN_STR, n_valves=2)
         parsed = json.loads(device.build_payload(SAMPLE_RAW_DATA))
@@ -238,45 +255,17 @@ class TestDevice:
         assert "Valvula_V3" not in parsed
         assert "Valvula_V4" not in parsed
 
-    def test_build_payload_4_valves(self, mock_device_client):
+    def test_build_payload_4_valves(self):
         device = Device(device_id="d", connection_string=_FAKE_CONN_STR, n_valves=4)
         parsed = json.loads(device.build_payload(SAMPLE_RAW_DATA))
         assert len([k for k in parsed if k.startswith("Valvula_V")]) == 4
-
-    def test_send_calls_send_message(self, mock_device_client):
-        async def _run():
-            device = Device(device_id="d", connection_string=_FAKE_CONN_STR, n_valves=4)
-            await device.connect()
-            await device.send(SAMPLE_RAW_DATA)
-        asyncio.run(_run())
-        mock_device_client.send_message.assert_called_once()
-
-    def test_send_payload_is_valid_json(self, mock_device_client):
-        async def _run():
-            device = Device(device_id="d", connection_string=_FAKE_CONN_STR, n_valves=4)
-            await device.connect()
-            await device.send(SAMPLE_RAW_DATA)
-        asyncio.run(_run())
-        sent_message = mock_device_client.send_message.call_args[0][0]
-        payload = json.loads(sent_message.data)
-        assert "Valvula_V1" in payload
-        assert "Estado_Equipo" in payload
-
-    def test_async_context_manager(self, mock_device_client):
-        async def _run():
-            async with Device(device_id="d", connection_string=_FAKE_CONN_STR, n_valves=4) as device:
-                await device.send(SAMPLE_RAW_DATA)
-        asyncio.run(_run())
-        mock_device_client.connect.assert_called_once()
-        mock_device_client.shutdown.assert_called_once()
 
     def test_build_devices_returns_correct_count(self):
         with patch("src.devices.device.settings") as mock_settings:
             mock_settings.DEVICE.CONNECTION_STRINGS = [_FAKE_CONN_STR, _FAKE_CONN_STR]
             mock_settings.DEVICE.IDS = ["device-0", "device-1"]
             mock_settings.DEVICE.N_VALVES = [4, 2]
-            with patch("src.devices.device.IoTHubDeviceClient"):
-                devices = build_devices()
+            devices = build_devices()
         assert len(devices) == 2
         assert devices[0].device_id == "device-0"
         assert devices[0].n_valves == 4
@@ -303,7 +292,7 @@ class TestSendAllDevices:
         mock_instance = _make_async_client()
 
         with (
-            patch("src.devices.device.IoTHubDeviceClient") as MockClass,
+            patch("src.sender.azure_iot_sender.IoTHubDeviceClient") as MockClass,
             patch("src.devices.device.settings") as mock_settings,
         ):
             MockClass.create_from_connection_string.return_value = mock_instance
@@ -318,7 +307,7 @@ class TestSendAllDevices:
 
     def test_mismatched_lists_raise_value_error(self):
         with (
-            patch("src.devices.device.IoTHubDeviceClient"),
+            patch("src.sender.azure_iot_sender.IoTHubDeviceClient"),
             patch("src.devices.device.settings") as mock_settings,
         ):
             mock_settings.DEVICE.CONNECTION_STRINGS = [_FAKE_CONN_STR]

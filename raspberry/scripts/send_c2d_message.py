@@ -13,11 +13,11 @@ Requires IOTHUB_SERVICE_CONNECTION_STRING in .env — use iothubowner or a polic
 that has "service" permission.
 
 Run from project root:
-    uv --directory raspberry run python scripts/send_c2d_message.py <device-id> <method>
+    uv --directory raspberry run python scripts/send_c2d_message.py <device-id> <method> <user>
 
 Examples:
-    uv --directory raspberry run python scripts/send_c2d_message.py pulse-id-100 run_hmi
-    uv --directory raspberry run python scripts/send_c2d_message.py pulse-id-101 stop_hmi '{"speed": 3}'
+    uv --directory raspberry run python scripts/send_c2d_message.py pulse-id-100 run_hmi admin
+    uv --directory raspberry run python scripts/send_c2d_message.py pulse-id-101 stop_hmi operator '{"speed": 3}'
 """
 
 import argparse
@@ -37,6 +37,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Silence noisy uamqp internals — promote to WARNING
+for _noisy in ("uamqp.connection", "uamqp.sender", "uamqp.c_uamqp", "uamqp.authentication.cbs_auth"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 VALID_METHODS = {"run_hmi", "stop_hmi", "reset_hmi"}
 
 
@@ -50,6 +54,7 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(VALID_METHODS),
         help="HMI method to invoke on the device",
     )
+    parser.add_argument("user", help="User generating the HMI command")
     parser.add_argument(
         "payload",
         nargs="?",
@@ -77,7 +82,7 @@ def main() -> None:
         print(f"ERROR: invalid JSON payload — {exc}", file=sys.stderr)
         sys.exit(1)
 
-    body = json.dumps({"method": args.method, **extra})
+    body = json.dumps({"method": args.method, "user": args.user, **extra})
 
     logger.info("Connecting to IoT Hub (service)…")
     registry_manager = IoTHubRegistryManager.from_connection_string(conn_str)

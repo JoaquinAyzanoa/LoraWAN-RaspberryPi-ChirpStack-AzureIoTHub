@@ -21,8 +21,8 @@ class AzureIoTSender:
     """
     Async low-level IoT Hub transport for a single device.
 
-    For most use-cases prefer :class:`src.devices.Device`, which combines
-    configuration, payload building, and sending in one object.
+    For most use-cases prefer :class:`~src.devices.runner.DeviceRunner`, which
+    manages the full lifecycle (reconnect, send queue, C2D, direct methods).
 
     Parameters
     ----------
@@ -77,7 +77,7 @@ class AzureIoTSender:
 
 
 # ---------------------------------------------------------------------------
-# Multi-device helper — delegates to Device
+# Multi-device helper — uses DeviceRunner.enqueue for queued delivery
 # ---------------------------------------------------------------------------
 
 
@@ -86,14 +86,18 @@ async def send_all_devices(raw_data: dict[str, Any]) -> None:
     Build the correct per-device payload and send it to every configured
     Azure IoT Hub device concurrently.
 
-    Each :class:`~src.devices.Device` uses its own ``n_valves`` to slice
-    only its valves from *raw_data*.
+    Each device creates a temporary connection, sends the message, then
+    shuts down.  For long-running use, prefer :class:`DeviceRunner`.
     """
     import asyncio
-    from ..devices import build_devices  # local import avoids circular dep
+    from ..devices import build_devices
 
     async def _send_one(device: Any) -> None:
-        async with device:
-            await device.send(raw_data)
+        async with AzureIoTSender(
+            connection_string=device.connection_string,
+            device_id=device.device_id,
+            n_valves=device.n_valves,
+        ) as sender:
+            await sender.send(raw_data)
 
     await asyncio.gather(*(_send_one(d) for d in build_devices()))

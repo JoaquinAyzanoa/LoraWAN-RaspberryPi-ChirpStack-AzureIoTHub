@@ -97,6 +97,15 @@ class IoTHubSettings(BaseSettings):
     SERVICE_CONNECTION_STRING: str = ""
 
 
+@dataclass
+class InfraSettings(BaseSettings):
+    """
+    Reads INFRA_* env vars automatically.
+    """
+
+    DB_PATH: str = "data/database.db"
+
+
 # ---------------------------------------------------------------------------
 # Root Settings class
 # ---------------------------------------------------------------------------
@@ -110,6 +119,7 @@ class Settings:
     DEVICE: DeviceSettings = field(default_factory=DeviceSettings)
     CHIRPSTACK: ChirpStackSettings = field(default_factory=ChirpStackSettings)
     IOTHUB: IoTHubSettings = field(default_factory=IoTHubSettings)
+    INFRA: InfraSettings = field(default_factory=InfraSettings)
 
 
 # Singleton – import this everywhere.

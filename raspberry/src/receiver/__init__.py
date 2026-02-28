@@ -1,8 +1,5 @@
-from .azure_iot_receiver import AzureIoTReceiver, build_receivers
-from . import hmi_methods
+from .azure_iot_receiver import DirectMethodRegistry
 
 __all__ = [
-    "AzureIoTReceiver",
-    "build_receivers",
-    "hmi_methods",
+    "DirectMethodRegistry",
 ]

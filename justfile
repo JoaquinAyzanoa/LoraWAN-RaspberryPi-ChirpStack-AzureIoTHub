@@ -5,5 +5,9 @@ set working-directory := "raspberry"
 export UV_PROJECT_ENVIRONMENT := join(justfile_directory(), ".venv")
 
 # Run all tests in raspberry/tests
-rp-tests:
+tests:
     uv run pytest tests -v
+
+# Run the application
+run:
+    uv run python main.py
