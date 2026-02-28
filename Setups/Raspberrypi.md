@@ -84,3 +84,29 @@ sudo tcpdump -AUq port 1700
 ```
 
 If packets are arriving from the gateway, you will see output in the terminal. If nothing appears, check your firewall rules and network configuration.
+
+---
+
+## 🐍 Step 8: Set Up the Python Environment (uv)
+
+Install `uv` (fast Python package manager):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Create the virtual environment and install dependencies from the `raspberry/` project:
+
+```bash
+cd raspberry
+uv sync
+```
+
+This reads `pyproject.toml` inside `raspberry/`, creates a `.venv`, and installs all dependencies (including dev tools like `pytest`).
+
+### Verify the environment
+
+```bash
+uv run python scripts/see_vars.py   # print all settings variables
+uv run pytest tests -v              # run the test suite
+```
